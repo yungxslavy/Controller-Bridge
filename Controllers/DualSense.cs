@@ -94,7 +94,7 @@ namespace Controllers
         }
 
         private void SearchForController()
-        {   
+        {
             // Look through all connected devices for a controller connected
             foreach (var deviceInstance in _directInput.GetDevices(DeviceType.Gamepad, DeviceEnumerationFlags.AllDevices))
             {
@@ -110,7 +110,7 @@ namespace Controllers
                 Console.WriteLine("Found Joystick/Gamepad with GUID: {0}", _controller.Information.InstanceGuid);
                 break;
             }
-               
+
             // If no controller is found, return
             if (_controller == null)
             {
@@ -155,27 +155,27 @@ namespace Controllers
                     break;
                 // L2 Button
                 case JoystickOffset.RotationX:
-                    _virtualDS4.SetSliderValue(DualShock4Slider.LeftTrigger, Convert.ToByte((state.Value / (double)ushort.MaxValue) * 255));
+                    _virtualDS4.SetSliderValue(DualShock4Slider.LeftTrigger, Convert.ToByte(state.Value / (double)ushort.MaxValue * 255));
                     break;
                 // R2 Button
                 case JoystickOffset.RotationY:
-                    _virtualDS4.SetSliderValue(DualShock4Slider.RightTrigger, Convert.ToByte((state.Value / (double)ushort.MaxValue) * 255));
+                    _virtualDS4.SetSliderValue(DualShock4Slider.RightTrigger, Convert.ToByte(state.Value / (double)ushort.MaxValue * 255));
                     break;
                 // LS X-Axis 
                 case JoystickOffset.X:
-                    _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbX, Convert.ToByte((state.Value / (double)ushort.MaxValue) * 255));
+                    _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbX, Convert.ToByte(state.Value / (double)ushort.MaxValue * 255));
                     break;
                 // LS Y-Axis
                 case JoystickOffset.Y:
-                    _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbY, Convert.ToByte((state.Value / (double)ushort.MaxValue) * 255));
+                    _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbY, Convert.ToByte(state.Value / (double)ushort.MaxValue * 255));
                     break;
                 // RS X-Axis
                 case JoystickOffset.RotationZ:
-                    _virtualDS4.SetAxisValue(DualShock4Axis.RightThumbY, Convert.ToByte((state.Value / (double)ushort.MaxValue) * 255));
+                    _virtualDS4.SetAxisValue(DualShock4Axis.RightThumbY, Convert.ToByte(state.Value / (double)ushort.MaxValue * 255));
                     break;
                 // RS Y-Axis
                 case JoystickOffset.Z:
-                    _virtualDS4.SetAxisValue(DualShock4Axis.RightThumbX, Convert.ToByte((state.Value / (double)ushort.MaxValue) * 255));
+                    _virtualDS4.SetAxisValue(DualShock4Axis.RightThumbX, Convert.ToByte(state.Value / (double)ushort.MaxValue * 255));
                     break;
             }
 
