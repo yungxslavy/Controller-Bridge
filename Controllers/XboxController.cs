@@ -2,83 +2,10 @@
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.DualShock4;
+using System.Diagnostics;
 
 namespace Controllers
 {
-    public class XboxController
-    {
-        private const int RefreshRate = 60; // 60 calls/second
-        private const int PollingInterval = 1000 / RefreshRate; // ~16ms
-        private const int ReconnectInterval = 1000; // Check every second if disconnected
-
-        private Controller _controller;
-        private CancellationTokenSource _cts;
-        private bool _isConnected;
-        private int _pollCounter = 0;
-
-        public XboxController()
-        {
-            _controller = new Controller(UserIndex.One);
-            _cts = new CancellationTokenSource();
-        }
-
-        public void Start()
-        {
-            Task.Run(() => PollController(_cts.Token));
-        }
-
-        public void Stop()
-        {
-            _cts.Cancel();
-        }
-
-        private async Task PollController(CancellationToken token)
-        {
-            while (!token.IsCancellationRequested)
-            {
-                if (_controller.IsConnected)
-                {
-                    if (!_isConnected)
-                    {
-                        Console.WriteLine("Controller Connected!");
-                        _isConnected = true;
-                    }
-
-                    Update();
-                    await Task.Delay(PollingInterval, token); // Efficient sleep
-                }
-                else
-                {
-                    if (_isConnected)
-                    {
-                        Console.WriteLine("Controller Disconnected!");
-                        _isConnected = false;
-                    }
-                    Console.WriteLine("Waiting for controller...");
-                    await Task.Delay(ReconnectInterval, token); // Slow polling if disconnected
-                }
-            }
-        }
-
-        private void Update()
-        {
-            _controller.GetState(out var state);
-            if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.A))
-            {
-                Console.WriteLine("A button pressed");
-            }
-            if (NormalizeThumb(state.Gamepad.LeftThumbY) > .2 || NormalizeThumb(state.Gamepad.LeftThumbY) < -.2)
-            {
-                Console.WriteLine(NormalizeThumb(state.Gamepad.LeftThumbY));
-            }
-        }
-
-        private float NormalizeThumb(short value)
-        {
-            return Math.Clamp(value / 32767.0f, -1, 1);
-        }
-    }
-
     public class XboxToPS4
     {
         private const int RefreshRate = 60; // 60Hz
@@ -89,13 +16,20 @@ namespace Controllers
         private ViGEmClient _viGEmClient;
         private IDualShock4Controller _virtualDS4;
 
+        private Dictionary<GamepadButtonFlags, List<Action>> _macros = new();
+        private Dictionary<GamepadButtonFlags, Task> _activeMacros = new(); // Track active macros to prevent overlapping
+        private Dictionary<DualShock4Button, bool> _overriddenButtons = new();
+        private Dictionary<GamepadButtonFlags, DualShock4Button> _buttonRemappings = new();
+
+
         public XboxToPS4()
         {
             _xboxController = new Controller(UserIndex.One);
             _cts = new CancellationTokenSource();
             _viGEmClient = new ViGEmClient();
             _virtualDS4 = _viGEmClient.CreateDualShock4Controller();
-            _virtualDS4.Connect(); // Creates a virtual DS4 controller
+            _virtualDS4.Connect();                                      // Creates a virtual DS4 controller
+            LoadConfiguration();
         }
 
         public void Start()
@@ -108,6 +42,12 @@ namespace Controllers
         {
             _cts.Cancel();
             _virtualDS4.Disconnect();
+        }
+
+        public void LoadConfiguration()
+        {
+            var config = ConfigurationManager.Load();
+            _buttonRemappings = config.Xbox.ButtonMappings;
         }
 
         private async Task PollController(CancellationToken token)
@@ -127,31 +67,97 @@ namespace Controllers
             }
         }
 
+        private Byte NormalizeThumb(short value)
+        {
+            return (Byte)((value + 32768) / 257);
+        }
+
         private void Update()
         {
-            _virtualDS4.SetButtonState(DualShock4Button.Cross, true);
-            _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbX, 140);
-
             if (!_xboxController.GetState(out var state)) return;
 
-            // Map Xbox Buttons to PlayStation
-            _virtualDS4.SetButtonState(DualShock4Button.Cross, state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.A));
-            _virtualDS4.SetButtonState(DualShock4Button.Circle, state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.B));
-            _virtualDS4.SetButtonState(DualShock4Button.Square, state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.X));
-            _virtualDS4.SetButtonState(DualShock4Button.Triangle, state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.Y));
+            // Check for macro triggers
+            foreach (var macro in _macros)
+            {
+                var button = macro.Key;
+                if (state.Gamepad.Buttons.HasFlag(button))
+                {
+                    // Only trigger the macro if it's not already running
+                    if (!_activeMacros.TryGetValue(button, out var runningTask) || runningTask.IsCompleted)
+                    {
+                        // Start the macro and track it
+                        var macroTask = RunMacroAsync(macro.Value, button);
+                        _activeMacros[button] = macroTask;
+                    }
+                }
+            }
+
+            // Process other inputs (remapping, triggers, thumbsticks, etc.)
+            ProcessInputs(state);
+
+            // Update the virtual controller
+            _virtualDS4.SubmitReport();
+        }
+
+        private async Task RunMacroAsync(List<Action> macroActions, GamepadButtonFlags button)
+        {
+            try
+            {
+                foreach (var action in macroActions)
+                {
+                    action.Invoke();
+                    await Task.Delay(1); // Non-blocking delay
+                }
+            }
+            finally
+            {
+                // Remove the macro from tracking when done (even if it errors)
+                _activeMacros.Remove(button);
+            }
+        }
+
+        private void ProcessInputs(State state)
+        {
+            foreach (var mapping in _buttonRemappings)
+            {
+                var dualShockButton = mapping.Value;
+
+                // Button down only if its not being overridden by a macro
+                if (!_overriddenButtons.ContainsKey(dualShockButton))
+                {   
+                    _virtualDS4.SetButtonState(dualShockButton, state.Gamepad.Buttons.HasFlag(mapping.Key));
+                }
+            }
+
+            // Directional Input
+            if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadUp | GamepadButtonFlags.DPadLeft))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.Northwest);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadUp | GamepadButtonFlags.DPadRight))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.Northeast);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadDown | GamepadButtonFlags.DPadLeft))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.Southwest);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadDown | GamepadButtonFlags.DPadRight))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.Southeast);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadUp))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.North);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadDown))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.South);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadLeft))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.West);
+            else if (state.Gamepad.Buttons.HasFlag(GamepadButtonFlags.DPadRight))
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.East);
+            else
+                _virtualDS4.SetDPadDirection(DualShock4DPadDirection.None);
 
             // Map Triggers
             _virtualDS4.SetSliderValue(DualShock4Slider.LeftTrigger, state.Gamepad.LeftTrigger);
             _virtualDS4.SetSliderValue(DualShock4Slider.RightTrigger, state.Gamepad.RightTrigger);
 
             // Map Thumbsticks
-            //_virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbX, Convert.ToByte(state.Gamepad.LeftThumbX / 255));
-            //_virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbY, Convert.ToByte(state.Gamepad.LeftThumbY / 255));
-            //_virtualDS4.SetAxisValue(DualShock4Axis.RightThumbX, Convert.ToByte(state.Gamepad.RightThumbX / 255));
-            //_virtualDS4.SetAxisValue(DualShock4Axis.RightThumbY, Convert.ToByte(state.Gamepad.RightThumbY / 255));
-
-            // Update the virtual controller
-            _virtualDS4.SubmitReport();
+            _virtualDS4.SetAxisValue(DualShock4Axis.RightThumbX, NormalizeThumb(state.Gamepad.RightThumbX));
+            _virtualDS4.SetAxisValue(DualShock4Axis.RightThumbY, (byte)(255 - NormalizeThumb(state.Gamepad.RightThumbY)));
+            _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbX, NormalizeThumb(state.Gamepad.LeftThumbX));
+            _virtualDS4.SetAxisValue(DualShock4Axis.LeftThumbY, (byte)(255 - NormalizeThumb(state.Gamepad.LeftThumbY)));
         }
     }
 }

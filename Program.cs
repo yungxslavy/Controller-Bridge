@@ -7,7 +7,7 @@ namespace Controller_Bridge
         static void Main(string[] args)
         {
             //XboxToPS4 controller = new();
-            PSToPS4 controller = new();
+            XboxToPS4 controller = new();
             controller.Start();
             Console.ReadLine();
         }
